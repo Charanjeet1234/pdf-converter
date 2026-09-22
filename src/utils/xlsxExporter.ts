@@ -200,11 +200,74 @@ function applyBlockToWorksheet(worksheet: ExcelJS.Worksheet, block: DocumentBloc
   occupancy.claim(startRow, endRow, startCol, endCol);
 }
 
-function buildWorksheetForPage(workbook: ExcelJS.Workbook, page: DocumentPage, pageIndex: number) {
+/**
+ * Fades a rasterized page image toward white so it can act as a light reference backdrop
+ * without visually competing with our own (fully opaque) overlaid text — the raster already
+ * has the original text baked into its pixels, so showing it at full strength behind our own
+ * live text would recreate the doubled/garbled look. Falls back to the original image if
+ * canvas/Image APIs aren't available (e.g. a non-browser test environment) or loading fails.
+ */
+function fadeBackgroundImage(dataUrl: string): Promise<string> {
+  return new Promise((resolve) => {
+    if (typeof document === 'undefined' || typeof Image === 'undefined') {
+      resolve(dataUrl);
+      return;
+    }
+    try {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = img.naturalWidth || img.width;
+          canvas.height = img.naturalHeight || img.height;
+          const ctx = canvas.getContext('2d');
+          if (!ctx || canvas.width === 0 || canvas.height === 0) {
+            resolve(dataUrl);
+            return;
+          }
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          // Wash most of the way to white — enough to read as a faint structural guide,
+          // not enough to look like a second layer of real text.
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.82)';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          resolve(canvas.toDataURL('image/jpeg', 0.7));
+        } catch {
+          resolve(dataUrl);
+        }
+      };
+      img.onerror = () => resolve(dataUrl);
+      img.src = dataUrl;
+    } catch {
+      resolve(dataUrl);
+    }
+  });
+}
+
+async function buildWorksheetForPage(workbook: ExcelJS.Workbook, page: DocumentPage, pageIndex: number) {
   const worksheet = workbook.addWorksheet(`Page ${pageIndex + 1}`, {
-    views: [{ showGridLines: false }],
+    views: [{ showGridLines: true }],
     pageSetup: { orientation: 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
   });
+
+  // Show the actual original page — faded to a light reference backdrop — behind the
+  // (transparent-fill, bordered) editable cells, instead of plain white. This is a
+  // display-only backdrop: Excel does not include worksheet background images when printing
+  // or exporting to PDF, so a PDF made from this sheet later will show the text/borders/fonts
+  // we built (which do print) but not this reference image.
+  if (page.backgroundImageUrl) {
+    try {
+      const faded = await fadeBackgroundImage(page.backgroundImageUrl);
+      const match = /^data:image\/(png|jpe?g|gif);base64,/i.exec(faded);
+      if (match) {
+        const rawExt = match[1].toLowerCase();
+        const extension: 'png' | 'jpeg' | 'gif' = rawExt === 'jpg' ? 'jpeg' : (rawExt as 'png' | 'jpeg' | 'gif');
+        const imageId = workbook.addImage({ base64: faded, extension });
+        worksheet.addBackgroundImage(imageId);
+      }
+    } catch (err) {
+      console.warn('xlsx export: could not add page background image', err);
+    }
+  }
 
   const pageWidthPt = page.width || FALLBACK_PAGE_WIDTH_PT;
   const pageHeightPt = page.height || FALLBACK_PAGE_HEIGHT_PT;
@@ -250,7 +313,9 @@ export async function exportToXlsx(docModel: DocumentModel): Promise<Blob> {
   workbook.title = docModel.title || 'Document';
   workbook.created = new Date();
 
-  docModel.pages.forEach((page, idx) => buildWorksheetForPage(workbook, page, idx));
+  for (const [idx, page] of docModel.pages.entries()) {
+    await buildWorksheetForPage(workbook, page, idx);
+  }
 
   const buffer = await workbook.xlsx.writeBuffer();
   return new Blob([buffer], {
