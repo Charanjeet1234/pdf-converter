@@ -431,7 +431,13 @@ export const DocumentPageCanvas: React.FC<DocumentPageCanvasProps> = ({
                       fontSize: block.fontSize ? `${block.fontSize}px` : '13px',
                       fontWeight: block.isBold ? 700 : block.fontWeight || (block.type.startsWith('h') ? 600 : 400),
                       fontStyle: block.isItalic ? 'italic' : 'normal',
-                      color: block.textColor || (container === 'sidebar' ? '#334155' : '#0f172a'),
+                      // The rasterized page image underneath already shows this text pixel-for-pixel.
+                      // Only reveal this editable overlay's own text once it diverges from that image
+                      // (actively being edited, or already edited) — otherwise both layers render at
+                      // once and the page looks doubled/garbled.
+                      color: isActive || isEdited
+                        ? block.textColor || (container === 'sidebar' ? '#334155' : '#0f172a')
+                        : 'transparent',
                       textAlign: block.align || 'left',
                       fontFamily: block.fontFamily || 'inherit',
                       lineHeight: '1.25',
