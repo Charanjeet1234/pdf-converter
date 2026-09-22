@@ -1,0 +1,6 @@
+{
+  "name": "PDF Converter & Editor",
+  "description": "Import, edit, convert PDF to DOCX, make changes, and export to PDF, DOCX, and other formats with offline editing capabilities.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
