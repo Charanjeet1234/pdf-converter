@@ -44,15 +44,79 @@ function blockToGridRect(block: DocumentBlock) {
   return { startRow, endRow, startCol, endCol };
 }
 
-function applyBlockToWorksheet(worksheet: ExcelJS.Worksheet, block: DocumentBlock) {
+/**
+ * Tracks which grid cells a previous block has already claimed (via a merge or a plain cell
+ * value), since two blocks whose measured positions round to the same grid cell would
+ * otherwise make ExcelJS throw ("Cannot merge already merged cells") and abort the whole
+ * export over a single field.
+ */
+class OccupancyTracker {
+  private claimed = new Set<string>();
+
+  private key(r: number, c: number): string {
+    return `${r},${c}`;
+  }
+
+  isFree(r: number, c: number): boolean {
+    return !this.claimed.has(this.key(r, c));
+  }
+
+  claim(startRow: number, endRow: number, startCol: number, endCol: number) {
+    for (let r = startRow; r <= endRow; r++) {
+      for (let c = startCol; c <= endCol; c++) {
+        this.claimed.add(this.key(r, c));
+      }
+    }
+  }
+
+  /**
+   * Shrinks a candidate rectangle so it no longer overlaps anything already claimed, by
+   * pulling endCol/endRow inward. Returns null if even the top-left starting cell is taken
+   * (rare — two blocks rounding to the exact same starting cell), in which case the caller
+   * should skip placing this block rather than fight over the cell.
+   */
+  fitRect(startRow: number, endRow: number, startCol: number, endCol: number) {
+    if (!this.isFree(startRow, startCol)) return null;
+
+    let safeEndCol = endCol;
+    for (let r = startRow; r <= endRow; r++) {
+      for (let c = startCol + 1; c <= safeEndCol; c++) {
+        if (!this.isFree(r, c)) {
+          safeEndCol = c - 1;
+          break;
+        }
+      }
+    }
+
+    let safeEndRow = endRow;
+    for (let r = startRow + 1; r <= safeEndRow; r++) {
+      let rowClear = true;
+      for (let c = startCol; c <= safeEndCol; c++) {
+        if (!this.isFree(r, c)) {
+          rowClear = false;
+          break;
+        }
+      }
+      if (!rowClear) {
+        safeEndRow = r - 1;
+        break;
+      }
+    }
+
+    return { startRow, endRow: safeEndRow, startCol, endCol: safeEndCol };
+  }
+}
+
+function applyBlockToWorksheet(worksheet: ExcelJS.Worksheet, block: DocumentBlock, occupancy: OccupancyTracker) {
   if (block.type === 'divider') return; // decorative rule — nothing meaningful to place
   if (!block.content && !block.tableData) return;
 
-  const { startRow, endRow, startCol, endCol } = blockToGridRect(block);
+  const rawRect = blockToGridRect(block);
 
   // An embedded table block (used by hand-authored documents, not PDF import) — lay its own
   // rows/columns out starting at the block's position rather than treating it as one cell.
   if (block.type === 'table' && block.tableData) {
+    const { startRow, endCol, startCol } = rawRect;
     const allRows = [block.tableData.headers, ...block.tableData.rows];
     const totalCols = Math.max(block.tableData.headers.length, 1);
     const colSpan = Math.max(1, Math.floor((endCol - startCol + 1) / totalCols));
@@ -61,25 +125,36 @@ function applyBlockToWorksheet(worksheet: ExcelJS.Worksheet, block: DocumentBloc
       row.forEach((cellText, cIdx) => {
         const cellStartCol = startCol + cIdx * colSpan;
         const cellEndCol = cIdx === row.length - 1 ? endCol : cellStartCol + colSpan - 1;
-        const cell = worksheet.getCell(rowIndex, cellStartCol);
+        const fitted = occupancy.fitRect(rowIndex, rowIndex, cellStartCol, cellEndCol);
+        if (!fitted) return; // cell already taken — skip rather than crash the export
+        const cell = worksheet.getCell(fitted.startRow, fitted.startCol);
         cell.value = cellText;
         cell.font = { name: 'Calibri', size: 10, bold: rIdx === 0 };
         cell.alignment = { horizontal: 'left', vertical: 'middle', wrapText: true };
-        if (cellEndCol > cellStartCol) {
-          worksheet.mergeCells(rowIndex, cellStartCol, rowIndex, cellEndCol);
+        try {
+          if (fitted.endCol > fitted.startCol) {
+            worksheet.mergeCells(fitted.startRow, fitted.startCol, fitted.endRow, fitted.endCol);
+          }
+          for (let c = fitted.startCol; c <= fitted.endCol; c++) {
+            worksheet.getCell(fitted.startRow, c).border = {
+              top: THIN_BORDER,
+              bottom: THIN_BORDER,
+              left: THIN_BORDER,
+              right: THIN_BORDER,
+            };
+          }
+        } catch (err) {
+          console.warn('xlsx export: skipped merging a table cell', err);
         }
-        for (let c = cellStartCol; c <= cellEndCol; c++) {
-          worksheet.getCell(rowIndex, c).border = {
-            top: THIN_BORDER,
-            bottom: THIN_BORDER,
-            left: THIN_BORDER,
-            right: THIN_BORDER,
-          };
-        }
+        occupancy.claim(fitted.startRow, fitted.endRow, fitted.startCol, fitted.endCol);
       });
     });
     return;
   }
+
+  const fitted = occupancy.fitRect(rawRect.startRow, rawRect.endRow, rawRect.startCol, rawRect.endCol);
+  if (!fitted) return; // starting cell already taken by an earlier block — skip rather than crash
+  const { startRow, endRow, startCol, endCol } = fitted;
 
   const targetCell = worksheet.getCell(startRow, startCol);
   targetCell.value = block.content;
@@ -96,25 +171,33 @@ function applyBlockToWorksheet(worksheet: ExcelJS.Worksheet, block: DocumentBloc
     wrapText: true,
   };
 
-  if (endRow > startRow || endCol > startCol) {
-    worksheet.mergeCells(startRow, startCol, endRow, endCol);
-  }
+  try {
+    if (endRow > startRow || endCol > startCol) {
+      worksheet.mergeCells(startRow, startCol, endRow, endCol);
+    }
 
-  // A page title (h1) usually floats above the table rather than living inside a bordered
-  // cell in the source document, so leave it border-free; everything else in a parsed PDF —
-  // in every document tested — was inside a bordered field or table cell.
-  if (block.type !== 'h1') {
-    for (let r = startRow; r <= endRow; r++) {
-      for (let c = startCol; c <= endCol; c++) {
-        worksheet.getCell(r, c).border = {
-          top: THIN_BORDER,
-          bottom: THIN_BORDER,
-          left: THIN_BORDER,
-          right: THIN_BORDER,
-        };
+    // A page title (h1) usually floats above the table rather than living inside a bordered
+    // cell in the source document, so leave it border-free; everything else in a parsed PDF —
+    // in every document tested — was inside a bordered field or table cell.
+    if (block.type !== 'h1') {
+      for (let r = startRow; r <= endRow; r++) {
+        for (let c = startCol; c <= endCol; c++) {
+          worksheet.getCell(r, c).border = {
+            top: THIN_BORDER,
+            bottom: THIN_BORDER,
+            left: THIN_BORDER,
+            right: THIN_BORDER,
+          };
+        }
       }
     }
+  } catch (err) {
+    // Should be unreachable now that fitRect() only returns non-overlapping rectangles, but
+    // one bad cell must never take down the whole export.
+    console.warn('xlsx export: skipped merging a block', block.id, err);
   }
+
+  occupancy.claim(startRow, endRow, startCol, endCol);
 }
 
 function buildWorksheetForPage(workbook: ExcelJS.Workbook, page: DocumentPage, pageIndex: number) {
@@ -140,8 +223,9 @@ function buildWorksheetForPage(workbook: ExcelJS.Workbook, page: DocumentPage, p
     worksheet.getRow(r).height = rowHeightPt;
   }
 
+  const occupancy = new OccupancyTracker();
   for (const block of page.blocks) {
-    applyBlockToWorksheet(worksheet, block);
+    applyBlockToWorksheet(worksheet, block, occupancy);
   }
 }
 
