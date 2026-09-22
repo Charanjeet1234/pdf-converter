@@ -179,6 +179,7 @@ export async function parsePdfFile(file: File): Promise<DocumentModel> {
         isBold: boolean;
         isItalic: boolean;
         columnGroup: 'left' | 'right' | 'full' | 'sidebar' | 'header';
+        hadLineBreak: boolean; // true once a span from a different visual line has been merged in
       }
 
       const workingBlocks: WorkingBlock[] = [];
@@ -206,6 +207,7 @@ export async function parsePdfFile(file: File): Promise<DocumentModel> {
             isBold: span.isBold,
             isItalic: span.isItalic,
             columnGroup: spanCol,
+            hadLineBreak: false,
           };
           continue;
         }
@@ -248,6 +250,7 @@ export async function parsePdfFile(file: File): Promise<DocumentModel> {
           currentWb.x = Math.min(currentWb.x, span.x);
           currentWb.width = rightX - currentWb.x;
           currentWb.height = Math.max(currentWb.height, span.y + span.height - currentWb.y);
+          if (!isSameLine) currentWb.hadLineBreak = true;
         } else {
           // Flush current block
           if (currentWb.text.trim()) {
@@ -263,6 +266,7 @@ export async function parsePdfFile(file: File): Promise<DocumentModel> {
             isBold: span.isBold,
             isItalic: span.isItalic,
             columnGroup: spanCol,
+            hadLineBreak: false,
           };
         }
       }
@@ -276,7 +280,12 @@ export async function parsePdfFile(file: File): Promise<DocumentModel> {
         const text = wb.text.trim();
         const xPct = Math.max(0, Math.min(95, (wb.x / pageWidth) * 100));
         const yPct = Math.max(0, Math.min(95, (wb.y / pageHeight) * 100));
-        const widthPct = Math.max(5, Math.min(100 - xPct, (wb.width / pageWidth) * 100));
+        // Add a modest safety margin to the measured width: word-width estimation from PDF
+        // text metrics is approximate, and a box that's even slightly too narrow for its own
+        // text forces an extra line to wrap in — which, for a block that was one line in the
+        // source PDF, pushes its box taller and over whatever sits below it. A little slack
+        // costs nothing when there's room, and avoids that far worse failure mode.
+        const widthPct = Math.max(5, Math.min(100 - xPct, ((wb.width * 1.18) / pageWidth) * 100));
         const heightPct = Math.max(1.5, (wb.height / pageHeight) * 100);
 
         // Classify block type based on font size and formatting
@@ -307,6 +316,7 @@ export async function parsePdfFile(file: File): Promise<DocumentModel> {
           height: Math.round(heightPct * 100) / 100,
           columnGroup: wb.columnGroup,
           isSpatial: true,
+          isSingleLine: !wb.hadLineBreak,
           align: 'left',
         };
       });

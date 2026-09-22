@@ -49,6 +49,7 @@ export interface DocumentBlock {
   fontWeight?: string | number;
   columnGroup?: 'left' | 'right' | 'full' | 'sidebar' | 'header' | 'footer';
   isSpatial?: boolean; // true if extracted from spatial PDF coordinates
+  isSingleLine?: boolean; // true if this text was one visual line in the source PDF (never wraps in the editor)
 }
 
 export interface DocumentPage {

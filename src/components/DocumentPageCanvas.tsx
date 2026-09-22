@@ -377,6 +377,7 @@ export const DocumentPageCanvas: React.FC<DocumentPageCanvasProps> = ({
                     onChange={(e) => onUpdateBlock(block.id, { content: e.target.value })}
                     placeholder="Type here..."
                     rows={1}
+                    wrap={block.isSingleLine ? 'off' : 'soft'}
                     className={`w-full bg-transparent resize-none outline-hidden leading-tight rounded-xs transition-colors p-0.5 ${
                       isActive ? 'border-b border-indigo-500' : 'border-b border-transparent'
                     }`}
@@ -395,6 +396,14 @@ export const DocumentPageCanvas: React.FC<DocumentPageCanvasProps> = ({
                       fontFamily: block.fontFamily || 'inherit',
                       lineHeight: '1.25',
                       caretColor: '#4f46e5',
+                      // A block that was a single visual line in the source PDF must stay that
+                      // way: measured width is only ever an estimate, and letting a "one line"
+                      // field wrap onto a second line makes its box grow taller and spill over
+                      // whatever sits below it on the page. Overflowing sideways instead is far
+                      // less disruptive than that, and rarely triggers now that width includes
+                      // a safety margin.
+                      whiteSpace: block.isSingleLine ? 'pre' : 'pre-wrap',
+                      overflow: block.isSingleLine ? 'hidden' : 'visible',
                     }}
                     ref={(el) => {
                       if (el) {
