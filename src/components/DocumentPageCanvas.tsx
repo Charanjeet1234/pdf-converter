@@ -43,6 +43,16 @@ export const DocumentPageCanvas: React.FC<DocumentPageCanvasProps> = ({
 
   const pdfPageImageDataUrl = page.backgroundImageUrl || page.thumbnailUrl;
 
+  // The page sheet is always rendered at a fixed 794px width (see the "Standard A4 Paper
+  // Sheet" div below). Font sizes measured off a real PDF are in points, taken from a page
+  // that is `page.width` points wide — so a raw point value can't be used as a pixel value
+  // directly, or text renders at the wrong size the moment it becomes visible (i.e. once
+  // edited). Scale it by the same ratio the page itself is being displayed at. Hand-authored
+  // pages (like the built-in sample) have no `page.width` in points and were authored with
+  // font sizes already meant as CSS pixels, so they're left unscaled.
+  const PAGE_CSS_WIDTH = 794;
+  const fontScale = page.width ? PAGE_CSS_WIDTH / page.width : 1;
+
   // Fallback canvas rendering only if no background image is available
   useEffect(() => {
     if (pdfPageImageDataUrl) return; // Background image handles everything at z-10
@@ -253,8 +263,6 @@ export const DocumentPageCanvas: React.FC<DocumentPageCanvasProps> = ({
                     ? 'ring-2 ring-indigo-500 shadow-md'
                     : isHovered
                     ? 'ring-1 ring-indigo-300 bg-indigo-50/40 cursor-text'
-                    : isEdited
-                    ? 'shadow-2xs'
                     : 'bg-transparent hover:ring-1 hover:ring-slate-300/60'
                 }`}
               >
@@ -373,7 +381,7 @@ export const DocumentPageCanvas: React.FC<DocumentPageCanvasProps> = ({
                       isActive ? 'border-b border-indigo-500' : 'border-b border-transparent'
                     }`}
                     style={{
-                      fontSize: block.fontSize ? `${block.fontSize}px` : '13px',
+                      fontSize: `${(block.fontSize ?? 13) * fontScale}px`,
                       fontWeight: block.isBold ? 700 : block.fontWeight || (block.type.startsWith('h') ? 600 : 400),
                       fontStyle: block.isItalic ? 'italic' : 'normal',
                       // The rasterized page image underneath already shows this text pixel-for-pixel.
