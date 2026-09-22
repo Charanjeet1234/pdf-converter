@@ -103,6 +103,15 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       badgeColor: 'bg-blue-100 text-blue-700',
     },
     {
+      id: 'xlsx',
+      label: 'Microsoft Excel Workbook',
+      ext: '.xlsx',
+      desc: 'Spreadsheet with each field kept in its original position, font, and cell border',
+      icon: <FileSpreadsheet className="w-6 h-6 text-green-600" />,
+      badge: 'Layout Preserved',
+      badgeColor: 'bg-green-100 text-green-700',
+    },
+    {
       id: 'pdf',
       label: 'Portable Document Format',
       ext: '.pdf',

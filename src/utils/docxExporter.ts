@@ -10,8 +10,127 @@ import {
   TableCell,
   WidthType,
   BorderStyle,
+  IBorderOptions,
 } from 'docx';
 import { DocumentBlock, DocumentModel, DocumentPage } from '../types';
+
+const NO_BORDERS: Record<'top' | 'bottom' | 'left' | 'right', IBorderOptions> = {
+  top: { style: BorderStyle.NONE, size: 0, color: 'auto' },
+  bottom: { style: BorderStyle.NONE, size: 0, color: 'auto' },
+  left: { style: BorderStyle.NONE, size: 0, color: 'auto' },
+  right: { style: BorderStyle.NONE, size: 0, color: 'auto' },
+};
+
+// Light slate, close to the gridlines typically used in invoices/forms.
+const CELL_BORDER_COLOR = 'CBD5E1';
+const THIN_BORDERS: Record<'top' | 'bottom' | 'left' | 'right', IBorderOptions> = {
+  top: { style: BorderStyle.SINGLE, size: 4, color: CELL_BORDER_COLOR },
+  bottom: { style: BorderStyle.SINGLE, size: 4, color: CELL_BORDER_COLOR },
+  left: { style: BorderStyle.SINGLE, size: 4, color: CELL_BORDER_COLOR },
+  right: { style: BorderStyle.SINGLE, size: 4, color: CELL_BORDER_COLOR },
+};
+
+function fillerCell(widthPct: number): TableCell {
+  return new TableCell({
+    width: { size: Math.max(0.1, Math.round(widthPct * 100) / 100), type: WidthType.PERCENTAGE },
+    borders: NO_BORDERS,
+    children: [new Paragraph({ children: [] })],
+  });
+}
+
+/**
+ * A page is "grid-like" (a form/invoice/table of many discrete fields) rather than a flowing
+ * document (a letter, a resume's prose sections) when it has a good number of blocks and most
+ * of them are short — i.e. single fields, not multi-line paragraphs. Grid-like pages get a
+ * spatial table reconstruction (see buildSpatialTable); everything else keeps the simpler
+ * linear/sidebar flow, which suits genuinely flowing content better.
+ */
+function isGridLikePage(page: DocumentPage): boolean {
+  const blocks = page.blocks.filter((b) => b.type !== 'divider');
+  if (blocks.length < 10) return false;
+  const shortBlocks = blocks.filter((b) => (b.height ?? 3) <= 8);
+  return shortBlocks.length / blocks.length >= 0.6;
+}
+
+/**
+ * Reconstructs a grid-like page as a real Word table: blocks are grouped into visual rows by
+ * y-proximity (the way they'd read on the page), ordered left-to-right within each row, and
+ * placed into cells sized from each block's own measured width — with a thin border on each
+ * cell, matching the bordered fields/cells the source document actually has. Gaps between and
+ * around blocks become plain, borderless filler cells so real spacing is preserved rather than
+ * stretching content to fill it.
+ */
+function buildSpatialTable(page: DocumentPage): Table {
+  const blocks = page.blocks
+    .filter((b) => b.type !== 'divider' && ((b.content && b.content.trim()) || b.tableData))
+    .slice()
+    .sort((a, b) => {
+      const ay = a.y ?? 0;
+      const by = b.y ?? 0;
+      if (Math.abs(ay - by) > 1.5) return ay - by;
+      return (a.x ?? 0) - (b.x ?? 0);
+    });
+
+  const rows: DocumentBlock[][] = [];
+  let currentRow: DocumentBlock[] = [];
+  let currentRowY: number | null = null;
+
+  for (const block of blocks) {
+    const by = block.y ?? 0;
+    const bh = block.height ?? 2.5;
+    const tolerance = Math.max(1.5, bh * 0.6);
+    if (currentRowY === null) {
+      currentRow = [block];
+      currentRowY = by;
+    } else if (Math.abs(by - currentRowY) <= tolerance) {
+      currentRow.push(block);
+    } else {
+      rows.push(currentRow);
+      currentRow = [block];
+      currentRowY = by;
+    }
+  }
+  if (currentRow.length) rows.push(currentRow);
+
+  const tableRows: TableRow[] = rows.map((rowBlocks) => {
+    rowBlocks.sort((a, b) => (a.x ?? 0) - (b.x ?? 0));
+    const cells: TableCell[] = [];
+    let cursor = 0;
+
+    rowBlocks.forEach((block) => {
+      let bx = Math.max(block.x ?? cursor, cursor);
+      bx = Math.min(bx, 99);
+      const gap = bx - cursor;
+      if (gap > 2) cells.push(fillerCell(gap));
+
+      const rawWidth = Math.max(block.width ?? 100 - bx, 3);
+      const cellWidth = Math.min(rawWidth, 100 - bx);
+
+      cells.push(
+        new TableCell({
+          width: { size: Math.round(cellWidth * 100) / 100, type: WidthType.PERCENTAGE },
+          borders: block.type === 'h1' ? NO_BORDERS : THIN_BORDERS,
+          margins: { top: 80, bottom: 80, left: 100, right: 100 },
+          children:
+            block.type === 'table' && block.tableData
+              ? convertBlockToDocxElements(block)
+              : convertBlockToDocxElements(block),
+        })
+      );
+      cursor = bx + cellWidth;
+    });
+
+    if (100 - cursor > 2) cells.push(fillerCell(100 - cursor));
+
+    return new TableRow({ children: cells });
+  });
+
+  return new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    borders: NO_BORDERS,
+    rows: tableRows,
+  });
+}
 
 export async function exportToDocx(docModel: DocumentModel): Promise<Blob> {
   const sections = docModel.pages.map((page, pageIdx) => {
@@ -26,12 +145,18 @@ export async function exportToDocx(docModel: DocumentModel): Promise<Blob> {
       );
     }
 
-    // Check if this page has multi-column / sidebar layout
-    const isMultiColumn =
-      page.hasMultiColumn ||
-      page.blocks.some((b) => b.columnGroup === 'sidebar' || b.columnGroup === 'left');
+    if (isGridLikePage(page)) {
+      // A form/invoice/table-style page: rebuild it as a real table so the original grid,
+      // field positions, and cell borders survive in Word rather than becoming a flat list
+      // of paragraphs in reading order.
+      children.push(buildSpatialTable(page));
+    } else {
+      // Check if this page has multi-column / sidebar layout
+      const isMultiColumn =
+        page.hasMultiColumn ||
+        page.blocks.some((b) => b.columnGroup === 'sidebar' || b.columnGroup === 'left');
 
-    if (isMultiColumn) {
+      if (isMultiColumn) {
       // 1. Top Header Banner blocks (fixed at top: 0 to 18%)
       const headerBlocks = page.blocks.filter(
         (b) =>
@@ -110,10 +235,11 @@ export async function exportToDocx(docModel: DocumentModel): Promise<Blob> {
 
         children.push(layoutTable);
       }
-    } else {
-      // Standard linear flow layout
-      for (const block of page.blocks) {
-        children.push(...convertBlockToDocxElements(block));
+      } else {
+        // Standard linear flow layout
+        for (const block of page.blocks) {
+          children.push(...convertBlockToDocxElements(block));
+        }
       }
     }
 
