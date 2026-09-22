@@ -77,7 +77,7 @@ export interface DocumentModel {
   activeLayoutMode?: 'spatial' | 'flow';
 }
 
-export type ExportFormat = 'docx' | 'pdf' | 'html' | 'txt' | 'markdown' | 'png';
+export type ExportFormat = 'docx' | 'pdf' | 'html' | 'txt' | 'markdown' | 'png' | 'xlsx';
 
 export interface ToastMessage {
   id: string;

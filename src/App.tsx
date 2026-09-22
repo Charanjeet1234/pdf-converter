@@ -10,6 +10,7 @@ import {
 import { SAMPLE_DOCUMENT } from './utils/sampleData';
 import { parsePdfFile } from './utils/pdfParser';
 import { exportToDocx } from './utils/docxExporter';
+import { exportToXlsx } from './utils/xlsxExporter';
 import { exportToPdf, PdfExportOptions } from './utils/pdfExporter';
 import {
   exportToHtml,
@@ -575,6 +576,18 @@ export default function App() {
             'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
           );
           showToast('success', 'Saved as Word Document (.docx)', `${filename} saved.`);
+          break;
+        }
+
+        case 'xlsx': {
+          const blob = await exportToXlsx(docModel);
+          const filename = sanitizeFilename(docModel.title || 'document', 'xlsx');
+          triggerDownload(
+            blob,
+            filename,
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+          );
+          showToast('success', 'Saved as Excel Workbook (.xlsx)', `${filename} saved.`);
           break;
         }
 

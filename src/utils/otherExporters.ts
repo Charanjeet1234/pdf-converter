@@ -243,7 +243,7 @@ function escapeHtml(str: string): string {
 export function sanitizeFilename(name: string, targetExt?: string): string {
   let clean = (name || 'document').trim();
   // Remove existing known extensions from name
-  clean = clean.replace(/\.(pdf|docx|html|htm|txt|md|markdown)$/i, '');
+  clean = clean.replace(/\.(pdf|docx|xlsx|html|htm|txt|md|markdown)$/i, '');
   // Replace invalid filename characters: \ / : * ? " < > |
   clean = clean.replace(/[\\/:*?"<>|]/g, '_').trim();
   if (!clean) clean = 'document';
