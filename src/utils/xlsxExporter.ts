@@ -209,16 +209,25 @@ function buildWorksheetForPage(workbook: ExcelJS.Workbook, page: DocumentPage, p
   const pageWidthPt = page.width || FALLBACK_PAGE_WIDTH_PT;
   const pageHeightPt = page.height || FALLBACK_PAGE_HEIGHT_PT;
 
-  // Column width is in Excel's "character width" units, roughly px / 7 for the default font.
+  // Column width is in Excel's "character width" units. The standard conversion is
+  // px = round(units * MDW + 5), where MDW (max digit width, ~7px for Calibri 11) and the
+  // constant "+5" is a one-time per-visible-column padding overhead. That "+5" must NOT be
+  // divided across our 100 fine grid slices — subtracting it from each slice individually
+  // (as an earlier version of this did) ate away most of the real width, forcing far more
+  // text-wrapping than the original document had. Since Excel doesn't grow row height to fit
+  // wrapped text in a merged cell, that wrapping just got silently clipped. Each slice's width
+  // is simply its share of pixels converted through MDW, with no per-slice offset.
   const pxPerCol = ((pageWidthPt * 1.3333) / GRID_COLS);
-  const colWidthUnits = Math.max(0.3, (pxPerCol - 5) / 7);
+  const colWidthUnits = Math.max(0.3, pxPerCol / 7);
   for (let c = 1; c <= GRID_COLS; c++) {
     worksheet.getColumn(c).width = colWidthUnits;
   }
 
   // Row height is in points directly in Excel — a direct, precise mapping from the PDF's own
-  // point-based page height.
-  const rowHeightPt = pageHeightPt / GRID_ROWS;
+  // point-based page height. A small (12%) safety margin is added since Excel does not
+  // auto-grow row height to fit wrapped text inside a merged cell (unlike a normal cell), so
+  // a little slack here is cheap insurance against a line of text clipping.
+  const rowHeightPt = (pageHeightPt / GRID_ROWS) * 1.12;
   for (let r = 1; r <= GRID_ROWS; r++) {
     worksheet.getRow(r).height = rowHeightPt;
   }
