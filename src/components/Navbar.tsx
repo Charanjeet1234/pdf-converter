@@ -253,6 +253,23 @@ export const Navbar: React.FC<NavbarProps> = ({
               </button>
 
               <button
+                id="export-opt-xlsx"
+                onClick={() => {
+                  setExportDropdownOpen(false);
+                  onExportFormat('xlsx');
+                }}
+                className="w-full text-left px-3 py-2 hover:bg-green-50 hover:text-green-700 flex items-center gap-2.5 transition-colors"
+              >
+                <div className="w-6 h-6 rounded bg-green-100 text-green-700 flex items-center justify-center font-bold text-[10px]">
+                  XLSX
+                </div>
+                <div>
+                  <div className="font-semibold text-slate-800">Excel Workbook (.xlsx)</div>
+                  <div className="text-[10px] text-slate-400">Layout, fonts & borders preserved</div>
+                </div>
+              </button>
+
+              <button
                 id="export-opt-pdf"
                 onClick={() => {
                   setExportDropdownOpen(false);
