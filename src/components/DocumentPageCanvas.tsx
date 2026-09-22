@@ -207,82 +207,27 @@ export const DocumentPageCanvas: React.FC<DocumentPageCanvasProps> = ({
           />
         )}
 
-        {/* 2. Structured Layout Containers (z-index: 20) */}
+        {/* 2. Text Overlay Layer (z-index: 20)
+              Every block is positioned using the exact page-relative x/y/width/height that was
+              measured straight off the PDF's own text coordinates. We deliberately do NOT
+              re-map blocks into a "header banner + sidebar + main column" zone system: that
+              remapping assumes a layout the document may not actually have, and re-deriving a
+              position from a guessed zone is a second source of drift on top of the original
+              measurement — which is what made edit boxes appear detached from the real text.
+              Keeping the raw coordinates is what keeps a block exactly where it visually is. */}
         {(() => {
-          const isMultiColumn =
-            page.hasMultiColumn ||
-            page.blocks.some(
-              (b) =>
-                b.columnGroup === 'sidebar' ||
-                b.columnGroup === 'left' ||
-                ((b.x ?? 0) < 35 && (b.y ?? 0) >= 18)
-            );
-
-          const headerBlocks = page.blocks.filter(
-            (b) =>
-              b.columnGroup === 'header' ||
-              (!['sidebar', 'left', 'right'].includes(b.columnGroup || '') && (b.y ?? 0) < 18)
-          );
-
-          const sidebarBlocks = page.blocks.filter(
-            (b) =>
-              !headerBlocks.includes(b) &&
-              (b.columnGroup === 'sidebar' ||
-                b.columnGroup === 'left' ||
-                ((b.x ?? 0) < 35 && (b.y ?? 0) >= 18))
-          );
-
-          const mainBlocks = page.blocks.filter(
-            (b) => !headerBlocks.includes(b) && !sidebarBlocks.includes(b)
-          );
-
-          const renderSpatialBlock = (
-            block: DocumentBlock,
-            container: 'header' | 'sidebar' | 'right' | 'single'
-          ) => {
+          const renderSpatialBlock = (block: DocumentBlock) => {
             const isActive = activeBlockId === block.id;
             const isHovered = hoveredBlockId === block.id;
             const isEdited =
               block.originalContent !== undefined &&
               block.content !== block.originalContent;
 
-            // Calculate precise relative percentage offset within its respective container
-            let relLeft = 5;
-            let relTop = 5;
-            let relWidth = 90;
-            let relMinHeight = 2;
-            let maskBg = '#ffffff';
-
-            if (container === 'header') {
-              // Top Header container: fixed at top: 0, height: 18%, width: 100%
-              relTop = Math.max(0, Math.min(88, ((block.y ?? 2) / 18) * 100));
-              relLeft = Math.max(0, Math.min(95, block.x ?? 5));
-              relWidth = Math.min(98 - relLeft, block.width ?? 90);
-              relMinHeight = Math.max(2, ((block.height ?? 2.5) / 18) * 100);
-              maskBg = '#ffffff';
-            } else if (container === 'sidebar') {
-              // Left Sidebar container: fixed at top: 18%, left: 0, width: 35%, height: 82%
-              relLeft = Math.max(2, Math.min(88, ((block.x ?? 2) / 35) * 100));
-              relTop = Math.max(1, Math.min(94, (((block.y ?? 18) - 18) / 82) * 100));
-              relWidth = Math.max(15, Math.min(96 - relLeft, ((block.width ?? 28) / 35) * 100));
-              relMinHeight = Math.max(1.8, ((block.height ?? 2.2) / 82) * 100);
-              maskBg = '#f8fafc';
-            } else if (container === 'right') {
-              // Right Main Column container: fixed at top: 18%, left: 35%, width: 65%, height: 82%
-              const rawX = (block.x ?? 35) >= 35 ? (block.x! - 35) : 2;
-              relLeft = Math.max(2, Math.min(88, (rawX / 65) * 100));
-              relTop = Math.max(1, Math.min(94, (((block.y ?? 18) - 18) / 82) * 100));
-              relWidth = Math.max(15, Math.min(96 - relLeft, ((block.width ?? 58) / 65) * 100));
-              relMinHeight = Math.max(1.8, ((block.height ?? 2.2) / 82) * 100);
-              maskBg = '#ffffff';
-            } else {
-              // Single full-page flow
-              relLeft = block.x ?? 5;
-              relTop = block.y ?? 5;
-              relWidth = block.width ?? 90;
-              relMinHeight = block.height ?? 2;
-              maskBg = '#ffffff';
-            }
+            const relLeft = block.x ?? 5;
+            const relTop = block.y ?? 5;
+            const relWidth = block.width ?? 90;
+            const relMinHeight = block.height ?? 2;
+            const maskBg = '#ffffff';
 
             return (
               <div
@@ -436,7 +381,7 @@ export const DocumentPageCanvas: React.FC<DocumentPageCanvasProps> = ({
                       // (actively being edited, or already edited) — otherwise both layers render at
                       // once and the page looks doubled/garbled.
                       color: isActive || isEdited
-                        ? block.textColor || (container === 'sidebar' ? '#334155' : '#0f172a')
+                        ? block.textColor || '#0f172a'
                         : 'transparent',
                       textAlign: block.align || 'left',
                       fontFamily: block.fontFamily || 'inherit',
@@ -460,45 +405,12 @@ export const DocumentPageCanvas: React.FC<DocumentPageCanvasProps> = ({
             );
           };
 
-          if (isMultiColumn) {
-            return (
-              <>
-                {/* Top Header Banner Container: Fixed at top: 0; width: 100%; height: 18%; */}
-                <div
-                  id={`page-${pageIndex + 1}-header-container`}
-                  className="absolute top-0 left-0 w-full z-20 pointer-events-none overflow-hidden"
-                  style={{ height: '18%' }}
-                >
-                  {headerBlocks.map((block) => renderSpatialBlock(block, 'header'))}
-                </div>
-
-                {/* Left Sidebar Container: Fixed at top: 18%; left: 0; width: 35%; height: 82%; */}
-                <div
-                  id={`page-${pageIndex + 1}-sidebar-container`}
-                  className="absolute z-20 pointer-events-none overflow-hidden"
-                  style={{ top: '18%', left: '0%', width: '35%', height: '82%' }}
-                >
-                  {sidebarBlocks.map((block) => renderSpatialBlock(block, 'sidebar'))}
-                </div>
-
-                {/* Right Main Column Container: Fixed at top: 18%; left: 35%; width: 65%; height: 82%; */}
-                <div
-                  id={`page-${pageIndex + 1}-main-container`}
-                  className="absolute z-20 pointer-events-none overflow-hidden"
-                  style={{ top: '18%', left: '35%', width: '65%', height: '82%' }}
-                >
-                  {mainBlocks.map((block) => renderSpatialBlock(block, 'right'))}
-                </div>
-              </>
-            );
-          }
-
           return (
             <div
               id={`page-${pageIndex + 1}-text-overlay-layer`}
               className="absolute top-0 left-0 w-full h-full z-20 pointer-events-none"
             >
-              {page.blocks.map((block) => renderSpatialBlock(block, 'single'))}
+              {page.blocks.map((block) => renderSpatialBlock(block))}
             </div>
           );
         })()}

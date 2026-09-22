@@ -211,14 +211,31 @@ export async function parsePdfFile(file: File): Promise<DocumentModel> {
         }
 
         // Determine if this span continues the current block:
-        // Same column group, vertical gap <= fontSize * 1.6, and similar font size
+        // Same column group, vertical gap <= fontSize * 1.6, similar font size,
+        // AND horizontally continuous with the block so far. That last check matters most:
+        // "header" (and, to a lesser extent, "sidebar"/"right") each cover a broad zone of the
+        // page, so two completely unrelated fields (e.g. a title on the far left and a detail
+        // box on the far right) can both land in the same zone. Without a horizontal-continuity
+        // requirement they'd be glued into one block purely because they're vertically close,
+        // producing a block whose text no longer corresponds to any single place on the page.
         const verticalGap = span.y - (currentWb.y + currentWb.height);
         const isSameColumn = currentWb.columnGroup === spanCol;
         const isSameLine = Math.abs(currentWb.y - span.y) < 5;
         const isNextLine = verticalGap >= -2 && verticalGap < currentWb.fontSize * 1.6;
         const isSameStyle = currentWb.isBold === span.isBold && Math.abs(currentWb.fontSize - span.fontSize) <= 3;
+        const blockRight = currentWb.x + currentWb.width;
+        // Same-row "Label :        Value" pairs can have a wide gap and still belong together,
+        // so the same-line tolerance scales with page width rather than font size alone — but a
+        // gap spanning roughly a third of the page usually means this is actually an unrelated
+        // section that merely happens to sit at the same y position (e.g. a page title and a
+        // detail box in the far corner), not a continuation of the same row.
+        const sameLineTolerance = Math.max(currentWb.fontSize * 3, pageWidth * 0.32);
+        const isHorizontallyContinuous = isSameLine
+          ? span.x >= currentWb.x - 5 && span.x <= blockRight + sameLineTolerance
+          : // Next line: a wrapped paragraph continues at (roughly) the same left margin.
+            Math.abs(span.x - currentWb.x) <= Math.max(20, currentWb.fontSize * 2);
 
-        if (isSameColumn && (isSameLine || (isNextLine && isSameStyle))) {
+        if (isSameColumn && isHorizontallyContinuous && (isSameLine || (isNextLine && isSameStyle))) {
           // Append text
           const needsSpace =
             !currentWb.text.endsWith(' ') &&
