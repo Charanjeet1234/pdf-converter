@@ -213,25 +213,31 @@ export async function parsePdfFile(file: File): Promise<DocumentModel> {
         }
 
         // Determine if this span continues the current block:
-        // Same column group, vertical gap <= fontSize * 1.6, similar font size,
-        // AND horizontally continuous with the block so far. That last check matters most:
-        // "header" (and, to a lesser extent, "sidebar"/"right") each cover a broad zone of the
-        // page, so two completely unrelated fields (e.g. a title on the far left and a detail
-        // box on the far right) can both land in the same zone. Without a horizontal-continuity
-        // requirement they'd be glued into one block purely because they're vertically close,
-        // producing a block whose text no longer corresponds to any single place on the page.
+        // Same column group, vertical gap <= fontSize * 1.05, similar font size,
+        // AND horizontally continuous with the block so far. These checks matter because a
+        // PDF has no explicit notion of "this is one field" — a heuristic can only infer it
+        // from position and style, so both thresholds below matter:
+        //  - Horizontal continuity stops two unrelated fields that merely sit at a similar
+        //    height (e.g. a title on the far left and a detail box on the far right, or a
+        //    label column and a completely different data column in a multi-column table)
+        //    from being glued together purely because they're vertically close.
+        //  - A tight vertical-gap threshold stops a genuinely separate table ROW (a new
+        //    label/value pair below, often with its own cell padding) from being read as a
+        //    continuation of the row above just because both sit in the same left-aligned
+        //    label column. Real wrapped paragraph lines (e.g. a multi-line address) sit much
+        //    closer together than that padding, so this still merges those correctly.
         const verticalGap = span.y - (currentWb.y + currentWb.height);
         const isSameColumn = currentWb.columnGroup === spanCol;
         const isSameLine = Math.abs(currentWb.y - span.y) < 5;
-        const isNextLine = verticalGap >= -2 && verticalGap < currentWb.fontSize * 1.6;
+        const isNextLine = verticalGap >= -2 && verticalGap < currentWb.fontSize * 1.05;
         const isSameStyle = currentWb.isBold === span.isBold && Math.abs(currentWb.fontSize - span.fontSize) <= 3;
         const blockRight = currentWb.x + currentWb.width;
-        // Same-row "Label :        Value" pairs can have a wide gap and still belong together,
-        // so the same-line tolerance scales with page width rather than font size alone — but a
-        // gap spanning roughly a third of the page usually means this is actually an unrelated
-        // section that merely happens to sit at the same y position (e.g. a page title and a
-        // detail box in the far corner), not a continuation of the same row.
-        const sameLineTolerance = Math.max(currentWb.fontSize * 3, pageWidth * 0.32);
+        // Same-row "Label :   Value" pairs (within one PDF text cell) can have a modest gap
+        // and still belong together, but this must stay far tighter than a fraction of the
+        // page: a wider gap is much more likely to mean the next span actually lives in a
+        // completely different table column (a real, separate cell) rather than being part of
+        // the same field's text.
+        const sameLineTolerance = Math.max(currentWb.fontSize * 3, pageWidth * 0.14);
         const isHorizontallyContinuous = isSameLine
           ? span.x >= currentWb.x - 5 && span.x <= blockRight + sameLineTolerance
           : // Next line: a wrapped paragraph continues at (roughly) the same left margin.
